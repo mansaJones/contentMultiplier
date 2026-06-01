@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Content Multiplier</title>
+  <style>
+    :root { --fg:#1a1a1a; --muted:#6b7280; --border:#e5e7eb; --bg:#fff; --accent:#1a1a1a; --err:#b91c1c; --err-bg:#fee2e2; --code-bg:#f8fafc; }
+    * { box-sizing: border-box; }
+    body { font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; max-width: 920px; margin: 2.5em auto; padding: 0 1.2em; color: var(--fg); background: var(--bg); }
+    h1 { font-size: 1.7em; margin: 0 0 0.2em; }
+    .sub { color: var(--muted); margin: 0 0 1.8em; }
+    label { display: block; margin: 1.1em 0 0.35em; font-weight: 600; font-size: 0.92em; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.9em; }
+    @media (max-width: 600px) { .row { grid-template-columns: 1fr; } }
+    textarea, input, select { width: 100%; padding: 0.55em 0.7em; font: inherit; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
+    textarea:focus, input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+    textarea { min-height: 96px; resize: vertical; }
+    button { margin-top: 1.4em; padding: 0.72em 1.6em; background: var(--accent); color: white; border: 0; border-radius: 6px; font: inherit; font-weight: 600; cursor: pointer; }
+    button:disabled { background: #9ca3af; cursor: not-allowed; }
+    .spinner { display: none; margin: 1.4em 0; padding: 0.8em 1em; background: #f3f4f6; border-radius: 6px; color: var(--muted); }
+    .spinner.on { display: block; }
+    .panels { margin-top: 2em; }
+    .panel { border: 1px solid var(--border); border-radius: 8px; margin: 0.9em 0; overflow: hidden; }
+    .panel > h2 { margin: 0; padding: 0.65em 1em; background: #f9fafb; font-size: 0.95em; font-weight: 600; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+    .panel > h2 .copy { background: transparent; color: var(--muted); border: 1px solid var(--border); padding: 0.25em 0.7em; font-size: 0.82em; cursor: pointer; margin: 0; border-radius: 4px; font-weight: 500; }
+    .panel > h2 .copy:hover { background: var(--bg); color: var(--fg); }
+    .body { padding: 1em 1.2em; white-space: pre-wrap; font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; max-height: 420px; overflow-y: auto; background: var(--code-bg); }
+    details { border: 1px solid var(--border); border-radius: 8px; margin: 0.9em 0; }
+    details > summary { padding: 0.65em 1em; background: #f9fafb; cursor: pointer; font-weight: 600; font-size: 0.95em; border-bottom: 1px solid transparent; user-select: none; }
+    details[open] > summary { border-bottom-color: var(--border); }
+    details > .body { border-top: 0; }
+    .err { color: var(--err); background: var(--err-bg); padding: 0.7em 1em; border-radius: 6px; margin: 1em 0; }
+    .note { color: var(--muted); font-size: 0.85em; margin-top: 0.35em; }
+  </style>
+</head>
+<body>
+  <h1>Content Multiplier</h1>
+  <p class="sub">Describe a podcast premise. The app synthesizes a transcript, then runs three transforms (LinkedIn / X thread / newsletter) against it.</p>
+
+  <form id="f">
+    <label for="topic">Podcast topic or premise</label>
+    <textarea id="topic" name="topic" required placeholder="e.g. How we killed our marketing attribution model and pipeline went up 23% — a B2B SaaS demand-gen leader's story."></textarea>
+    <p class="note">Specific premises with a counterintuitive angle produce the best drafts. Generic topics produce generic content.</p>
+
+    <div class="row">
+      <div>
+        <label for="tone">Tone</label>
+        <select id="tone">
+          <option>professional thought-leader</option>
+          <option>casual conversation</option>
+          <option>contrarian / spicy</option>
+          <option>analytical / data-heavy</option>
+          <option>founder personal narrative</option>
+        </select>
+      </div>
+      <div>
+        <label for="length">Approximate length</label>
+        <select id="length">
+          <option>3 minute monologue</option>
+          <option selected>5 minute monologue</option>
+          <option>8 minute monologue</option>
+        </select>
+      </div>
+    </div>
+
+    <label for="audience">Target audience</label>
+    <input id="audience" value="B2B marketing leaders" />
+
+    <button type="submit" id="go">Generate</button>
+  </form>
+
+  <div class="spinner" id="spin">Generating transcript and running the multiplier… typically 10-20 seconds.</div>
+
+  <div class="panels" id="panels"></div>
+
+  <script>
+    const form = document.getElementById('f');
+    const spin = document.getElementById('spin');
+    const panels = document.getElementById('panels');
+    const btn = document.getElementById('go');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      panels.innerHTML = '';
+      spin.classList.add('on');
+      btn.disabled = true;
+
+      try {
+        const res = await fetch('/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            topic: document.getElementById('topic').value,
+            tone: document.getElementById('tone').value,
+            audience: document.getElementById('audience').value,
+            length: document.getElementById('length').value,
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          panels.innerHTML = `<div class="err">Error: ${escapeHtml(data.error || res.statusText)}</div>`;
+          return;
+        }
+        renderResults(data);
+      } catch (err) {
+        panels.innerHTML = `<div class="err">Request failed: ${escapeHtml(String(err))}</div>`;
+      } finally {
+        spin.classList.remove('on');
+        btn.disabled = false;
+      }
+    });
+
+    function escapeHtml(s) {
+      return (s == null ? '' : String(s)).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+    function panel(title, body, id) {
+      return `<div class="panel"><h2><span>${escapeHtml(title)}</span><button class="copy" data-id="${id}">Copy</button></h2><div class="body" id="${id}">${escapeHtml(body)}</div></div>`;
+    }
+    function renderResults(d) {
+      let html = '';
+      html += `<details><summary>Generated transcript (${d.word_count} words)</summary><div class="body">${escapeHtml(d.transcript)}</div></details>`;
+      html += panel('LinkedIn — 3 posts', d.linkedin, 'li');
+      html += panel('X thread', d.x_thread, 'xt');
+      html += panel('Newsletter teaser', d.newsletter, 'nl');
+      if (d.errors && Object.keys(d.errors).length) {
+        html += `<div class="err">Notes from the pipeline: ${escapeHtml(JSON.stringify(d.errors))}</div>`;
+      }
+      panels.innerHTML = html;
+      panels.querySelectorAll('.copy').forEach(b => {
+        b.addEventListener('click', () => {
+          const el = document.getElementById(b.dataset.id);
+          navigator.clipboard.writeText(el.textContent || '').then(() => {
+            const orig = b.textContent; b.textContent = 'Copied'; setTimeout(() => b.textContent = orig, 1200);
+          });
+        });
+      });
+    }
+  </script>
+</body>
+</html>

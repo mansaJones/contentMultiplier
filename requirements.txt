@@ -1,0 +1,13 @@
+# Content Multiplier — runtime dependencies
+# Pinned loosely; tighten before you ship to prod.
+
+anthropic>=0.40.0          # Phase 2 LLM transform modules
+openai>=1.40.0             # Phase 1 Whisper transcription
+google-api-python-client>=2.140.0   # Phase 1 Drive watcher
+google-auth>=2.33.0
+google-auth-oauthlib>=1.2.0
+pyairtable>=2.3.0          # Phase 3 approval portal
+requests>=2.32.0           # Phase 4 distribution (Buffer / generic webhook)
+python-dotenv>=1.0.0       # config loading
+flask>=3.0.0               # web app (pivot to web UI)
+gunicorn>=21.2.0           # production WSGI server (for deploy)

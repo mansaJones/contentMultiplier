@@ -1,0 +1,22 @@
+# Secrets — NEVER commit
+.env
+.env.local
+credentials/
+
+# Local state
+.seen_ids.json
+.seen_ids.json.corrupt
+_work/
+source/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
