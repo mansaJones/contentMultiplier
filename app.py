@@ -73,11 +73,17 @@ def generate():
     tone = (data.get("tone") or "professional thought-leader").strip()
     audience = (data.get("audience") or "B2B marketing leaders").strip()
     length = (data.get("length") or "5 minute monologue").strip()
+    fmt = (data.get("format") or "monologue").strip().lower()
+    if fmt not in ("monologue", "interview"):
+        fmt = "monologue"
 
-    log.info("Generating: topic=%r tone=%r length=%r", topic[:60], tone, length)
+    log.info(
+        "Generating: format=%s topic=%r tone=%r length=%r",
+        fmt, topic[:60], tone, length,
+    )
     try:
         result = web_pipeline.generate_all(
-            topic=topic, tone=tone, audience=audience, length=length
+            topic=topic, tone=tone, audience=audience, length=length, format=fmt
         )
     except Exception as exc:  # noqa: BLE001
         log.exception("Generation failed")

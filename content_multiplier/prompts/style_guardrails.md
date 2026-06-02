@@ -21,3 +21,10 @@ update it frequently with examples of copy mistakes so the models stop repeating
 ## Factual integrity
 - Never invent statistics, names, dates, or quotes not present in the source transcript.
 - If a number appears in the source, preserve it exactly. If unsure, omit it.
+
+## Multi-speaker transcripts (interviews, panels)
+- If the transcript uses speaker labels (HOST:, GUEST:, names), treat the GUEST or subject-matter expert as the protagonist whose voice and POV drive the output.
+- Write LinkedIn posts in the GUEST's first-person voice. Do not narrate as the host.
+- X threads should read as the GUEST telling the story directly to the reader.
+- Newsletters should tease the GUEST's story, not the conversation between two people.
+- If the HOST says something specifically quotable that the GUEST then confirms, that quote is fair game; otherwise the GUEST's substance is the source of truth.

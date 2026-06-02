@@ -43,6 +43,12 @@
     <textarea id="topic" name="topic" required placeholder="e.g. How we killed our marketing attribution model and pipeline went up 23% — a B2B SaaS demand-gen leader's story."></textarea>
     <p class="note">Specific premises with a counterintuitive angle produce the best drafts. Generic topics produce generic content.</p>
 
+    <label for="format">Format</label>
+    <select id="format">
+      <option value="monologue" selected>Solo monologue</option>
+      <option value="interview">Host + guest interview</option>
+    </select>
+
     <div class="row">
       <div>
         <label for="tone">Tone</label>
@@ -57,9 +63,9 @@
       <div>
         <label for="length">Approximate length</label>
         <select id="length">
-          <option>3 minute monologue</option>
-          <option selected>5 minute monologue</option>
-          <option>8 minute monologue</option>
+          <option>3 minutes</option>
+          <option selected>5 minutes</option>
+          <option>8 minutes</option>
         </select>
       </div>
     </div>
@@ -95,6 +101,7 @@
             tone: document.getElementById('tone').value,
             audience: document.getElementById('audience').value,
             length: document.getElementById('length').value,
+            format: document.getElementById('format').value,
           })
         });
         const data = await res.json();

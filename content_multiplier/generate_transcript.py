@@ -14,7 +14,14 @@ from pathlib import Path
 from .config import CONFIG
 from .models import AssetKind, CleanText, SourceAsset
 
-_PROMPT_PATH = Path(__file__).parent / "prompts" / "transcript_generator.md"
+_PROMPT_DIR = Path(__file__).parent / "prompts"
+
+# Format -> prompt filename. Add new formats here (e.g. co_hosts, panel).
+_FORMAT_PROMPTS = {
+    "monologue": "transcript_generator.md",  # solo host monologue (default)
+    "interview": "transcript_interview.md",  # host + guest
+}
+_DEFAULT_FORMAT = "monologue"
 
 # Transcripts cap at ~900 words. ~1.5 tokens per word + headroom.
 _MAX_TOKENS = 2500
@@ -34,14 +41,27 @@ def _call_claude(prompt: str) -> str:
     ).strip()
 
 
-def generate(*, topic: str, tone: str, audience: str, length: str) -> CleanText:
-    """Generate a synthetic transcript and wrap it as a CleanText asset."""
-    template = _PROMPT_PATH.read_text(encoding="utf-8")
+def generate(
+    *,
+    topic: str,
+    tone: str,
+    audience: str,
+    length: str,
+    format: str = _DEFAULT_FORMAT,
+) -> CleanText:
+    """Generate a synthetic transcript and wrap it as a CleanText asset.
+
+    `format` selects the prompt template: 'monologue' (solo host) or
+    'interview' (host + guest). Unknown formats fall back to monologue.
+    """
+    fmt = (format or _DEFAULT_FORMAT).lower()
+    prompt_file = _FORMAT_PROMPTS.get(fmt, _FORMAT_PROMPTS[_DEFAULT_FORMAT])
+    template = (_PROMPT_DIR / prompt_file).read_text(encoding="utf-8")
     prompt = template.format(topic=topic, tone=tone, audience=audience, length=length)
     text = _call_claude(prompt)
     asset = SourceAsset(
-        file_id=f"generated:{topic[:40]}",
-        name=f"generated_{topic[:40].replace(' ', '_')}.txt",
+        file_id=f"generated:{fmt}:{topic[:40]}",
+        name=f"generated_{fmt}_{topic[:40].replace(' ', '_')}.txt",
         mime_type="text/plain",
         kind=AssetKind.TEXT,
     )
