@@ -34,7 +34,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 # Load .env BEFORE importing config (config reads at import time)
 load_dotenv()
 
-from content_multiplier import web_pipeline  # noqa: E402
+from content_multiplier import web_history, web_pipeline  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -249,6 +249,22 @@ def generate():
     # Only debit budget + IP counter on success — failed runs shouldn't burn the cap.
     budget.record()
     ip_tracker.record(get_remote_address())
+
+    # Persist to Airtable history. Wrapped so a save failure can never break
+    # the user-facing response — they got their content, that's what matters.
+    try:
+        web_history.save(
+            topic=topic, tone=tone, audience=audience, length=length, format=fmt,
+            transcript=result.get("transcript", ""),
+            word_count=result.get("word_count", 0),
+            linkedin=result.get("linkedin", ""),
+            x_thread=result.get("x_thread", ""),
+            newsletter=result.get("newsletter", ""),
+            errors=result.get("errors"),
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("History save raised unexpectedly; ignoring")
+
     log.info(
         "Done: %d-word transcript -> drafts (errors=%s)",
         result.get("word_count", 0),
