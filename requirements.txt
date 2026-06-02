@@ -10,4 +10,5 @@ pyairtable>=2.3.0          # Phase 3 approval portal
 requests>=2.32.0           # Phase 4 distribution (Buffer / generic webhook)
 python-dotenv>=1.0.0       # config loading
 flask>=3.0.0               # web app (pivot to web UI)
+flask-limiter>=3.5.0       # per-IP rate limiting on /generate
 gunicorn>=21.2.0           # production WSGI server (for deploy)
