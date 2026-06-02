@@ -138,17 +138,13 @@
         const r = await fetch('/quota');
         if (!r.ok) return;
         const q = await r.json();
-        const hr = q.ip.hourly_remaining;
-        const da = q.ip.daily_remaining;
-        const remaining = Math.min(hr, da);
-        // Display: use the most restrictive remaining count
+        const remaining = q.ip.daily_remaining;
         if (remaining <= 0) {
-          quotaEl.textContent = `0 attempts remaining`;
+          quotaEl.textContent = `0 attempts remaining today`;
           quotaEl.className = 'quota out';
-          const reset = hr <= 0 ? q.ip.hourly_reset_in_seconds : q.ip.daily_reset_in_seconds;
-          showLockout(`You've used all your attempts for this ${hr <= 0 ? 'hour' : 'day'}.`, reset);
+          showLockout("You've used all your attempts for today.", q.ip.daily_reset_in_seconds);
         } else {
-          quotaEl.textContent = `${remaining} attempt${remaining === 1 ? '' : 's'} remaining`;
+          quotaEl.textContent = `${remaining} of ${q.ip.daily_max} attempts remaining today`;
           quotaEl.className = remaining <= 1 ? 'quota low' : 'quota';
           hideLockout();
         }

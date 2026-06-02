@@ -52,8 +52,7 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 WEB_USERNAME = os.getenv("WEB_USERNAME", "admin")
 WEB_PASSWORD = os.getenv("WEB_PASSWORD", "")
 
-RATE_LIMIT_HOURLY = os.getenv("RATE_LIMIT_HOURLY", "5 per hour")
-RATE_LIMIT_DAILY = os.getenv("RATE_LIMIT_DAILY", "20 per day")
+RATE_LIMIT_DAILY = os.getenv("RATE_LIMIT_DAILY", "3 per day")
 
 DAILY_MAX_GENERATIONS = int(os.getenv("DAILY_MAX_GENERATIONS", "50"))
 DAILY_MAX_USD = float(os.getenv("DAILY_MAX_USD", "5.00"))
@@ -162,18 +161,16 @@ def _parse_amount(rate_str: str) -> int:
 
 
 class IPUsageTracker:
-    """Sliding-window counter mirroring the rate limiter, exposed for /quota.
+    """Sliding-window per-IP daily counter, exposed via /quota for the UI.
 
     In-memory only; same persistence caveats as the rate limiter and the
-    DailyBudget. Doesn't enforce limits — Flask-Limiter does that — this
-    just tells the UI what's left so the user can see it.
+    DailyBudget. Doesn't enforce — Flask-Limiter does that — this just
+    tells the UI what's left so the user can see the counter tick down.
     """
 
-    HOUR = 3600
     DAY = 86400
 
-    def __init__(self, hourly_max: int, daily_max: int):
-        self.hourly_max = hourly_max
+    def __init__(self, daily_max: int):
         self.daily_max = daily_max
         self._events: dict[str, deque[float]] = defaultdict(deque)
 
@@ -191,21 +188,11 @@ class IPUsageTracker:
         self._prune(ip)
         now = time.time()
         q = self._events[ip]
-        hourly_used = sum(1 for t in q if now - t < self.HOUR)
         daily_used = len(q)
-        hourly_reset = 0
         daily_reset = 0
-        if hourly_used >= self.hourly_max and q:
-            oldest_hr = next((t for t in q if now - t < self.HOUR), None)
-            if oldest_hr is not None:
-                hourly_reset = max(0, int(self.HOUR - (now - oldest_hr)))
         if daily_used >= self.daily_max and q:
             daily_reset = max(0, int(self.DAY - (now - q[0])))
         return {
-            "hourly_used": hourly_used,
-            "hourly_remaining": max(0, self.hourly_max - hourly_used),
-            "hourly_max": self.hourly_max,
-            "hourly_reset_in_seconds": hourly_reset,
             "daily_used": daily_used,
             "daily_remaining": max(0, self.daily_max - daily_used),
             "daily_max": self.daily_max,
@@ -213,10 +200,7 @@ class IPUsageTracker:
         }
 
 
-ip_tracker = IPUsageTracker(
-    hourly_max=_parse_amount(RATE_LIMIT_HOURLY),
-    daily_max=_parse_amount(RATE_LIMIT_DAILY),
-)
+ip_tracker = IPUsageTracker(daily_max=_parse_amount(RATE_LIMIT_DAILY))
 
 
 # --------------------------------------------------------------------------- #
@@ -230,7 +214,6 @@ def index():
 
 @app.route("/generate", methods=["POST"])
 @requires_auth
-@limiter.limit(RATE_LIMIT_HOURLY)
 @limiter.limit(RATE_LIMIT_DAILY)
 def generate():
     data = request.get_json(silent=True) or {}
@@ -295,7 +278,6 @@ def stats():
     return jsonify({
         "budget": budget.status(),
         "rate_limits": {
-            "per_ip_hourly": RATE_LIMIT_HOURLY,
             "per_ip_daily": RATE_LIMIT_DAILY,
         },
         "auth_enabled": bool(WEB_PASSWORD),
