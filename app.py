@@ -34,7 +34,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 # Load .env BEFORE importing config (config reads at import time)
 load_dotenv()
 
-from content_multiplier import web_history, web_pipeline  # noqa: E402
+from content_multiplier import cost_monitor, web_history, web_pipeline  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -290,13 +290,23 @@ def quota():
 @app.route("/stats")
 @requires_auth
 def stats():
-    """Current rate-limit config + daily budget state. Useful for monitoring."""
+    """Daily budget + per-window cost monitoring + alert state.
+
+    A side effect of hitting this endpoint is that the monthly-cost alert
+    webhook fires (once per calendar month) if you've crossed the configured
+    threshold — so a periodic uptime ping at /stats doubles as your alerting
+    mechanism.
+    """
+    usage = cost_monitor.get_usage_summary()
+    alert_result = cost_monitor.check_and_alert(usage)
     return jsonify({
         "budget": budget.status(),
         "rate_limits": {
             "per_ip_daily": RATE_LIMIT_DAILY,
         },
         "auth_enabled": bool(WEB_PASSWORD),
+        "usage": usage,
+        "alert_dispatch": alert_result,  # None if no alert was attempted
     })
 
 
