@@ -18,7 +18,10 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import secrets
+import time
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from functools import wraps
 
@@ -150,6 +153,73 @@ budget = DailyBudget(
 
 
 # --------------------------------------------------------------------------- #
+# Per-IP usage tracker (mirrors Flask-Limiter counts, exposed via /quota)
+# --------------------------------------------------------------------------- #
+def _parse_amount(rate_str: str) -> int:
+    """Extract the leading integer from a 'N per ...' Flask-Limiter string."""
+    m = re.match(r"\s*(\d+)", rate_str)
+    return int(m.group(1)) if m else 0
+
+
+class IPUsageTracker:
+    """Sliding-window counter mirroring the rate limiter, exposed for /quota.
+
+    In-memory only; same persistence caveats as the rate limiter and the
+    DailyBudget. Doesn't enforce limits — Flask-Limiter does that — this
+    just tells the UI what's left so the user can see it.
+    """
+
+    HOUR = 3600
+    DAY = 86400
+
+    def __init__(self, hourly_max: int, daily_max: int):
+        self.hourly_max = hourly_max
+        self.daily_max = daily_max
+        self._events: dict[str, deque[float]] = defaultdict(deque)
+
+    def _prune(self, ip: str) -> None:
+        now = time.time()
+        q = self._events[ip]
+        while q and now - q[0] > self.DAY:
+            q.popleft()
+
+    def record(self, ip: str) -> None:
+        self._prune(ip)
+        self._events[ip].append(time.time())
+
+    def stats(self, ip: str) -> dict:
+        self._prune(ip)
+        now = time.time()
+        q = self._events[ip]
+        hourly_used = sum(1 for t in q if now - t < self.HOUR)
+        daily_used = len(q)
+        hourly_reset = 0
+        daily_reset = 0
+        if hourly_used >= self.hourly_max and q:
+            oldest_hr = next((t for t in q if now - t < self.HOUR), None)
+            if oldest_hr is not None:
+                hourly_reset = max(0, int(self.HOUR - (now - oldest_hr)))
+        if daily_used >= self.daily_max and q:
+            daily_reset = max(0, int(self.DAY - (now - q[0])))
+        return {
+            "hourly_used": hourly_used,
+            "hourly_remaining": max(0, self.hourly_max - hourly_used),
+            "hourly_max": self.hourly_max,
+            "hourly_reset_in_seconds": hourly_reset,
+            "daily_used": daily_used,
+            "daily_remaining": max(0, self.daily_max - daily_used),
+            "daily_max": self.daily_max,
+            "daily_reset_in_seconds": daily_reset,
+        }
+
+
+ip_tracker = IPUsageTracker(
+    hourly_max=_parse_amount(RATE_LIMIT_HOURLY),
+    daily_max=_parse_amount(RATE_LIMIT_DAILY),
+)
+
+
+# --------------------------------------------------------------------------- #
 # Routes
 # --------------------------------------------------------------------------- #
 @app.route("/")
@@ -193,14 +263,29 @@ def generate():
         log.exception("Generation failed")
         return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 500
 
-    # Only debit budget on success — failed runs shouldn't burn the cap.
+    # Only debit budget + IP counter on success — failed runs shouldn't burn the cap.
     budget.record()
+    ip_tracker.record(get_remote_address())
     log.info(
         "Done: %d-word transcript -> drafts (errors=%s)",
         result.get("word_count", 0),
         bool(result.get("errors")),
     )
     return jsonify(result)
+
+
+@app.route("/quota")
+@requires_auth
+def quota():
+    """Current caller's remaining attempts + budget headroom (for the UI counter)."""
+    ip_stats = ip_tracker.stats(get_remote_address())
+    bud = budget.status()
+    budget_remaining = max(0, bud["generations_max"] - bud["generations_used"])
+    return jsonify({
+        "ip": ip_stats,
+        "budget_remaining": budget_remaining,
+        "budget_max": bud["generations_max"],
+    })
 
 
 @app.route("/stats")

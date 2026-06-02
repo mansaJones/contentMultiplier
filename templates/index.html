@@ -32,6 +32,17 @@
     details > .body { border-top: 0; }
     .err { color: var(--err); background: var(--err-bg); padding: 0.7em 1em; border-radius: 6px; margin: 1em 0; }
     .note { color: var(--muted); font-size: 0.85em; margin-top: 0.35em; }
+    .quota { display: inline-block; margin-left: 0.8em; color: var(--muted); font-size: 0.85em; vertical-align: middle; }
+    .quota.low { color: #b45309; font-weight: 600; }
+    .quota.out { color: var(--err); font-weight: 600; }
+    .lockout-overlay { position: fixed; inset: 0; background: rgba(26,26,26,0.55); display: none; align-items: center; justify-content: center; z-index: 50; padding: 1.5em; }
+    .lockout-overlay.on { display: flex; }
+    .lockout-card { background: var(--bg); max-width: 460px; width: 100%; padding: 1.6em 1.8em; border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,0.18); }
+    .lockout-card h2 { margin: 0 0 0.5em; font-size: 1.15em; }
+    .lockout-card p { margin: 0.5em 0; color: var(--fg); line-height: 1.55; }
+    .lockout-card .reset { color: var(--muted); font-size: 0.9em; }
+    .lockout-card a.cta { display: inline-block; margin-top: 1em; padding: 0.65em 1.2em; background: var(--accent); color: white; text-decoration: none; border-radius: 6px; font-weight: 600; }
+    .lockout-card a.cta:hover { opacity: 0.92; }
   </style>
 </head>
 <body>
@@ -74,9 +85,20 @@
     <input id="audience" value="B2B marketing leaders" />
 
     <button type="submit" id="go">Generate</button>
+    <span class="quota" id="quota" aria-live="polite"></span>
   </form>
 
   <div class="spinner" id="spin">Generating transcript and running the multiplier… typically 10-20 seconds.</div>
+
+  <div class="lockout-overlay" id="lockout" role="dialog" aria-modal="true" aria-labelledby="lockout-title">
+    <div class="lockout-card">
+      <h2 id="lockout-title">You've hit the generation limit</h2>
+      <p id="lockout-msg">No more attempts available right now.</p>
+      <p class="reset" id="lockout-reset"></p>
+      <p>Want more access? Get in touch and let's talk.</p>
+      <a class="cta" href="https://mansa-tech.com/#contact" target="_blank" rel="noopener">Contact me</a>
+    </div>
+  </div>
 
   <div class="panels" id="panels"></div>
 
@@ -85,6 +107,55 @@
     const spin = document.getElementById('spin');
     const panels = document.getElementById('panels');
     const btn = document.getElementById('go');
+    const quotaEl = document.getElementById('quota');
+    const lockoutEl = document.getElementById('lockout');
+    const lockoutMsg = document.getElementById('lockout-msg');
+    const lockoutReset = document.getElementById('lockout-reset');
+
+    function formatReset(seconds) {
+      if (!seconds || seconds <= 0) return '';
+      if (seconds < 60) return `Resets in under a minute.`;
+      const mins = Math.ceil(seconds / 60);
+      if (mins < 60) return `Resets in ~${mins} minute${mins === 1 ? '' : 's'}.`;
+      const hrs = Math.ceil(mins / 60);
+      return `Resets in ~${hrs} hour${hrs === 1 ? '' : 's'}.`;
+    }
+
+    function showLockout(reason, resetSeconds) {
+      lockoutMsg.textContent = reason || "No more attempts available right now.";
+      lockoutReset.textContent = formatReset(resetSeconds);
+      lockoutEl.classList.add('on');
+      btn.disabled = true;
+    }
+
+    function hideLockout() {
+      lockoutEl.classList.remove('on');
+      btn.disabled = false;
+    }
+
+    async function refreshQuota() {
+      try {
+        const r = await fetch('/quota');
+        if (!r.ok) return;
+        const q = await r.json();
+        const hr = q.ip.hourly_remaining;
+        const da = q.ip.daily_remaining;
+        const remaining = Math.min(hr, da);
+        // Display: use the most restrictive remaining count
+        if (remaining <= 0) {
+          quotaEl.textContent = `0 attempts remaining`;
+          quotaEl.className = 'quota out';
+          const reset = hr <= 0 ? q.ip.hourly_reset_in_seconds : q.ip.daily_reset_in_seconds;
+          showLockout(`You've used all your attempts for this ${hr <= 0 ? 'hour' : 'day'}.`, reset);
+        } else {
+          quotaEl.textContent = `${remaining} attempt${remaining === 1 ? '' : 's'} remaining`;
+          quotaEl.className = remaining <= 1 ? 'quota low' : 'quota';
+          hideLockout();
+        }
+      } catch (e) { /* silent; UI just won't show quota */ }
+    }
+
+    refreshQuota();
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -105,6 +176,14 @@
           })
         });
         const data = await res.json();
+        if (res.status === 429) {
+          const detail = data.detail || data.error || 'Rate limit exceeded.';
+          // Try to extract a Retry-After hint from headers
+          const ra = parseInt(res.headers.get('Retry-After') || '0', 10);
+          showLockout(detail, ra);
+          await refreshQuota();
+          return;
+        }
         if (!res.ok) {
           panels.innerHTML = `<div class="err">Error: ${escapeHtml(data.error || res.statusText)}</div>`;
           return;
@@ -114,7 +193,8 @@
         panels.innerHTML = `<div class="err">Request failed: ${escapeHtml(String(err))}</div>`;
       } finally {
         spin.classList.remove('on');
-        btn.disabled = false;
+        if (!lockoutEl.classList.contains('on')) btn.disabled = false;
+        await refreshQuota();
       }
     });
 
