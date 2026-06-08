@@ -1,17 +1,17 @@
 """Content Multiplier — Flask web app.
 
+GET  /        serves the gate (email capture) if no valid unlock cookie,
+              otherwise the main form + results UI.
+POST /unlock  accepts an email, persists it as a lead, sets a signed unlock
+              cookie (30-day expiry by default), returns 200 JSON.
 POST /generate runs the full pipeline (transcript synthesis + 3 transforms).
-GET /        serves the single-page form + results UI.
-GET /stats   returns current rate-limit + daily-budget state (auth-gated).
-GET /healthz unauthenticated health check.
+              Requires a valid unlock cookie; returns 403 otherwise.
+GET  /stats   returns budget + cost-monitoring state. Still HTTP Basic
+              auth-gated (admin only) since it leaks cost data.
+GET  /healthz unauthenticated health check.
 
-Auth: HTTP Basic. If WEB_PASSWORD is unset (local dev), auth is disabled.
-When deployed, set WEB_PASSWORD (and optionally WEB_USERNAME, default 'admin').
-
-Rate limiting (per-IP) and daily cost ceiling (global) both gate /generate.
-Both are in-memory; on Render free tier they reset whenever the container
-spins back up. Acceptable for v1 since the auth gate blocks most abuse;
-swap to a persistent backend (Redis, SQLite) for hardened production.
+Rate limiting (per-IP daily) and global daily cost ceiling both still gate
+/generate. In-memory; resets on container restart.
 """
 
 from __future__ import annotations
@@ -26,15 +26,16 @@ from datetime import datetime, timezone
 from functools import wraps
 
 from dotenv import load_dotenv
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Flask, Response, jsonify, make_response, render_template, request
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Load .env BEFORE importing config (config reads at import time)
 load_dotenv()
 
-from content_multiplier import cost_monitor, web_history, web_pipeline  # noqa: E402
+from content_multiplier import cost_monitor, leads, web_history, web_pipeline  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,6 +52,21 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
 WEB_USERNAME = os.getenv("WEB_USERNAME", "admin")
 WEB_PASSWORD = os.getenv("WEB_PASSWORD", "")
+
+# Unlock cookie config — signed via SECRET_KEY, expires after N days.
+UNLOCK_COOKIE_NAME = "cm_unlock"
+UNLOCK_DURATION_DAYS = int(os.getenv("UNLOCK_DURATION_DAYS", "30"))
+SECRET_KEY = os.getenv("SECRET_KEY", "")
+if not SECRET_KEY:
+    # Process-stable fallback so dev works without config. Loud warning so
+    # production deploys can't accidentally ship without a real key.
+    SECRET_KEY = secrets.token_urlsafe(32)
+    logging.warning(
+        "SECRET_KEY env var not set; generated an ephemeral one. "
+        "All unlock cookies will be invalidated on the next restart. "
+        "Set SECRET_KEY in production to make unlocks persistent."
+    )
+_unlock_serializer = URLSafeTimedSerializer(SECRET_KEY, salt="content-multiplier-unlock")
 
 RATE_LIMIT_DAILY = os.getenv("RATE_LIMIT_DAILY", "3 per day")
 
@@ -89,6 +105,44 @@ def requires_auth(f):
             )
         return f(*args, **kwargs)
 
+    return decorated
+
+
+# --------------------------------------------------------------------------- #
+# Unlock cookie (email-gate)
+# --------------------------------------------------------------------------- #
+def _has_valid_unlock() -> bool:
+    """True if the request carries an unexpired, properly-signed unlock cookie."""
+    token = request.cookies.get(UNLOCK_COOKIE_NAME)
+    if not token:
+        return False
+    try:
+        _unlock_serializer.loads(token, max_age=UNLOCK_DURATION_DAYS * 86400)
+        return True
+    except (SignatureExpired, BadSignature):
+        return False
+
+
+def _set_unlock_cookie(resp, email: str) -> None:
+    """Sign a token with the email payload and set as HttpOnly cookie."""
+    token = _unlock_serializer.dumps({"email": email})
+    resp.set_cookie(
+        UNLOCK_COOKIE_NAME,
+        token,
+        max_age=UNLOCK_DURATION_DAYS * 86400,
+        httponly=True,
+        samesite="Lax",
+        secure=bool(WEB_PASSWORD),  # WEB_PASSWORD set ≈ production deploy ≈ HTTPS
+    )
+
+
+def requires_unlock(f):
+    """Reject /generate calls that lack a valid unlock cookie."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not _has_valid_unlock():
+            return jsonify({"error": "unlock required", "unlock_url": "/"}), 403
+        return f(*args, **kwargs)
     return decorated
 
 
@@ -207,13 +261,39 @@ ip_tracker = IPUsageTracker(daily_max=_parse_amount(RATE_LIMIT_DAILY))
 # Routes
 # --------------------------------------------------------------------------- #
 @app.route("/")
-@requires_auth
 def index():
-    return render_template("index.html")
+    """Gate visitors who don't have a valid unlock cookie."""
+    if _has_valid_unlock():
+        return render_template("index.html")
+    return render_template("gate.html")
+
+
+@app.route("/unlock", methods=["POST"])
+def unlock():
+    """Accept an email, persist as a lead, set the unlock cookie."""
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    if not leads.is_valid_email(email):
+        return jsonify({"error": "Please enter a valid email address."}), 400
+
+    # Fire-and-forget lead save; cookie must succeed even if Airtable hiccups.
+    try:
+        leads.save(
+            email=email,
+            ip_address=get_remote_address() or "",
+            user_agent=request.headers.get("User-Agent", "")[:1000],
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("Lead save raised unexpectedly; granting access anyway")
+
+    resp = make_response(jsonify({"ok": True}))
+    _set_unlock_cookie(resp, email)
+    log.info("Unlocked: %s", email)
+    return resp
 
 
 @app.route("/generate", methods=["POST"])
-@requires_auth
+@requires_unlock
 @limiter.limit(RATE_LIMIT_DAILY)
 def generate():
     data = request.get_json(silent=True) or {}
@@ -274,7 +354,7 @@ def generate():
 
 
 @app.route("/quota")
-@requires_auth
+@requires_unlock
 def quota():
     """Current caller's remaining attempts + budget headroom (for the UI counter)."""
     ip_stats = ip_tracker.stats(get_remote_address())
