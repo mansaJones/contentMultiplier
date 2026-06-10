@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from functools import wraps
 
 from dotenv import load_dotenv
-from flask import Flask, Response, jsonify, make_response, render_template, request
+from flask import Flask, Response, jsonify, make_response, render_template, request, send_from_directory
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -394,6 +394,16 @@ def stats():
 def healthz():
     """Unauthenticated health check for deploy targets."""
     return "ok", 200
+
+
+@app.route("/favicon.ico")
+def favicon():
+    """Browsers auto-request /favicon.ico at the root; serve from /static."""
+    return send_from_directory(
+        os.path.join(app.root_path, "static"),
+        "favicon.ico",
+        mimetype="image/vnd.microsoft.icon",
+    )
 
 
 @app.errorhandler(429)
